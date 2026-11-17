@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useMemo, useState, useEffect } from "react";
 import {
   Activity,
   Apple,
@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { motion } from "motion/react";
+import { api } from "../services/api"; // Adjust to "./services/api" if services folder is in the same directory as App.tsx
 
 type Modal = "meal" | "exercise" | "profile" | "goals" | null;
 type ActivityLevel = "sedentary" | "light" | "moderate" | "active";
@@ -55,6 +56,8 @@ const foodOptions = [
   { name: "Chicken harvest plate", serving: "1 plate · 420 g", calories: 520, protein: 48, carbs: 54, fat: 14 },
   { name: "Avocado toast", serving: "2 slices · 210 g", calories: 410, protein: 14, carbs: 49, fat: 20 },
   { name: "Salmon rice bowl", serving: "1 bowl · 390 g", calories: 610, protein: 42, carbs: 68, fat: 19 },
+  { name: "Chicken Wrap", serving: "1 wrap · 180 g", calories: 333, protein: 24, carbs: 33, fat: 11 },
+  { name: "Chicken Caesar Salad", serving: "1 bowl · 220 g", calories: 407, protein: 27, carbs: 15, fat: 26 }
 ];
 
 const exerciseOptions = [
@@ -269,12 +272,59 @@ function Onboarding({ onFinish }: { onFinish: (profile: Profile) => void }) {
   );
 }
 
-function AddMealDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (item: LogItem) => void }) {
+function AddMealDialog({ onClose, onAdd, userId }: { onClose: () => void; onAdd: (item: LogItem) => void; userId: number }) {
   const [query, setQuery] = useState("");
+  const [foodList, setFoodList] = useState(foodOptions);
   const [selected, setSelected] = useState(foodOptions[0]);
   const [servings, setServings] = useState(1);
-  const filtered = foodOptions.filter((food) => food.name.toLowerCase().includes(query.toLowerCase()));
-  const add = () => {
+
+  useEffect(() => {
+    const fetchSearch = async () => {
+      if (!query.trim()) {
+        try {
+          const all = await api.getAllFoods();
+          setFoodList(all.map((f: any) => ({
+            name: f.name,
+            serving: `100 g`,
+            calories: f.caloriesPer100g,
+            protein: f.proteinPer100g,
+            carbs: f.carbsPer100g,
+            fat: f.fatPer100g
+          })));
+        } catch {
+          setFoodList(foodOptions);
+        }
+        return;
+      }
+      try {
+        const results = await api.searchFoods(query);
+        setFoodList(results.map((f: any) => ({
+          name: f.name,
+          serving: `100 g`,
+          calories: f.caloriesPer100g,
+          protein: f.proteinPer100g,
+          carbs: f.carbsPer100g,
+          fat: f.fatPer100g
+        })));
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchSearch();
+  }, [query]);
+
+  const add = async () => {
+    try {
+      await api.logMeal(userId, {
+        mealType: "Meal",
+        timestamp: new Date().toISOString(),
+        totalCalories: Math.round(selected.calories * servings),
+        foods: [{ name: selected.name, caloriesPer100g: selected.calories }]
+      });
+    } catch (err) {
+      console.error("Failed to sync meal to backend", err);
+    }
+
     onAdd({
       id: Date.now(), kind: "meal", title: selected.name, detail: `${servings} serving${servings === 1 ? "" : "s"} · Just now`,
       calories: Math.round(selected.calories * servings), protein: Math.round(selected.protein * servings),
@@ -282,12 +332,13 @@ function AddMealDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (item: 
     });
     onClose();
   };
+
   return (
     <DialogShell title="Add a meal" eyebrow="Nutrition database" onClose={onClose}>
       <div className="p-6">
         <div className="relative"><Search className="absolute left-4 top-3.5 size-5 text-black/35" /><input autoFocus className={`${inputClass} pl-12`} placeholder="Search foods and meals" value={query} onChange={(e) => setQuery(e.target.value)} /></div>
-        <div className="mt-5 space-y-2">
-          {filtered.map((food) => (
+        <div className="mt-5 max-h-48 space-y-2 overflow-y-auto">
+          {foodList.map((food) => (
             <button key={food.name} onClick={() => setSelected(food)} className={`flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition ${selected.name === food.name ? "border-[#e55235] bg-[#ff6846]/8" : "border-transparent bg-white hover:border-black/10"}`}>
               <span className={`grid size-11 place-items-center rounded-xl ${selected.name === food.name ? "bg-[#ff6846] text-white" : "bg-[#eeeae0]"}`}><Apple className="size-5" /></span>
               <span className="min-w-0 flex-1"><span className="block truncate text-sm font-extrabold">{food.name}</span><span className="text-xs text-black/42">{food.serving}</span></span>
@@ -301,7 +352,7 @@ function AddMealDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (item: 
             <div className="flex items-center gap-3"><button onClick={() => setServings(Math.max(0.5, servings - 0.5))} className="grid size-8 place-items-center rounded-full bg-white/10">−</button><strong>{servings}</strong><button onClick={() => setServings(servings + 0.5)} className="grid size-8 place-items-center rounded-full bg-[#eaff61] text-black">+</button></div>
           </div>
           <div className="mt-5 grid grid-cols-4 gap-2 border-t border-white/10 pt-4 text-center">
-            {[["Calories", selected.calories * servings], ["Protein", `${selected.protein * servings}g`], ["Carbs", `${selected.carbs * servings}g`], ["Fat", `${selected.fat * servings}g`]].map(([label, value]) => <div key={label}><div className="text-sm font-black">{value}</div><div className="mt-1 text-[9px] uppercase tracking-wide text-white/40">{label}</div></div>)}
+            {[["Calories", Math.round(selected.calories * servings)], ["Protein", `${Math.round(selected.protein * servings)}g`], ["Carbs", `${Math.round(selected.carbs * servings)}g`], ["Fat", `${Math.round(selected.fat * servings)}g`]].map(([label, value]) => <div key={label}><div className="text-sm font-black">{value}</div><div className="mt-1 text-[9px] uppercase tracking-wide text-white/40">{label}</div></div>)}
           </div>
         </div>
         <button onClick={add} className="mt-5 h-13 w-full rounded-2xl bg-[#ff6846] font-extrabold text-white transition hover:bg-[#e55235]">Add to today</button>
@@ -310,10 +361,27 @@ function AddMealDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (item: 
   );
 }
 
-function AddExerciseDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (item: LogItem) => void }) {
+function AddExerciseDialog({ onClose, onAdd, userId }: { onClose: () => void; onAdd: (item: LogItem) => void; userId: number }) {
   const [selected, setSelected] = useState(exerciseOptions[0]);
   const [duration, setDuration] = useState(30);
   const calories = Math.round(selected.perMinute * duration);
+
+  const handleLog = async () => {
+    try {
+      await api.logExercise(userId, {
+        type: selected.name,
+        durationMinutes: duration,
+        caloriesBurned: calories,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error("Failed to log exercise to backend", err);
+    }
+
+    onAdd({ id: Date.now(), kind: "exercise", title: selected.name, detail: `${duration} min · Just now`, calories }); 
+    onClose();
+  };
+
   return (
     <DialogShell title="Add exercise" eyebrow="Movement log" onClose={onClose}>
       <div className="p-6">
@@ -328,7 +396,7 @@ function AddExerciseDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (it
           <input aria-label="Exercise duration" type="range" min="10" max="120" step="5" value={duration} onChange={(e) => setDuration(+e.target.value)} className="mt-6 w-full accent-[#ff6846]" />
           <div className="mt-1 flex justify-between font-mono text-[9px] text-black/30"><span>10 MIN</span><span>120 MIN</span></div>
         </div>
-        <button onClick={() => { onAdd({ id: Date.now(), kind: "exercise", title: selected.name, detail: `${duration} min · Just now`, calories }); onClose(); }} className="mt-5 h-13 w-full rounded-2xl bg-[#ff6846] font-extrabold text-white transition hover:bg-[#e55235]">Log {calories} calories burned</button>
+        <button onClick={handleLog} className="mt-5 h-13 w-full rounded-2xl bg-[#ff6846] font-extrabold text-white transition hover:bg-[#e55235]">Log {calories} calories burned</button>
       </div>
     </DialogShell>
   );
@@ -369,13 +437,47 @@ function GoalsDialog({ profile, onClose, onSave }: { profile: Profile; onClose: 
   );
 }
 
-function App() {
-  const [onboarding, setOnboarding] = useState(true);
+export default function App() {
+  const userId = 1; 
+  const [onboarding, setOnboarding] = useState(false);
   const [modal, setModal] = useState<Modal>(null);
   const [profile, setProfile] = useState<Profile>({
-    name: "", age: 0, height: 0, weight: 0, gender: "male", activity: "moderate", goal: "maintain", goalWeight: 0,
+    name: "Pelopidas Tsiountsiouras", 
+    age: 22, 
+    height: 183.0, 
+    weight: 69.5, 
+    gender: "male", 
+    activity: "active", 
+    goal: "maintain", 
+    goalWeight: 69.5,
   });
   const [logs, setLogs] = useState<LogItem[]>([]);
+
+useEffect(() => {
+    const fetchUserData = async () => {
+      try {
+        // 1. Fetch user profile
+        const userData = await api.getUser(userId);
+        setProfile((prev) => ({
+          ...prev,
+          name: userData.name,
+          age: userData.age,
+          weight: userData.weight,
+          height: userData.height,
+          gender: userData.gender.toLowerCase() === "male" ? "male" : "female",
+        }));
+
+        // 2. Fetch user goals (ADD THIS LINE)
+        const userGoals = await api.getUserGoals(userId);
+        console.log("Fetched user goals:", userGoals);
+        
+      } catch (err) {
+        console.log("Using local default profile state (Backend offline or user not found)");
+      }
+    };
+    fetchUserData();
+  }, [userId]);
+
   const goals = useMemo(() => calculateGoals(profile), [profile]);
   const meals = logs.filter((item) => item.kind === "meal");
   const exercises = logs.filter((item) => item.kind === "exercise");
@@ -495,12 +597,10 @@ function App() {
         <button onClick={() => setModal("profile")} className="flex flex-col items-center gap-1 text-black/35"><UserRound className="size-5" /><span className="text-[10px] font-bold">Profile</span></button>
       </nav>
 
-      {modal === "meal" && <AddMealDialog onClose={() => setModal(null)} onAdd={addLog} />}
-      {modal === "exercise" && <AddExerciseDialog onClose={() => setModal(null)} onAdd={addLog} />}
+      {modal === "meal" && <AddMealDialog userId={userId} onClose={() => setModal(null)} onAdd={addLog} />}
+      {modal === "exercise" && <AddExerciseDialog userId={userId} onClose={() => setModal(null)} onAdd={addLog} />}
       {modal === "profile" && <ProfileDialog profile={profile} onClose={() => setModal(null)} onSave={setProfile} onRestart={() => { setModal(null); setOnboarding(true); }} />}
       {modal === "goals" && <GoalsDialog profile={profile} onClose={() => setModal(null)} onSave={setProfile} />}
     </main>
   );
 }
-
-export default App;
